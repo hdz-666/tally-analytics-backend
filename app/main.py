@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import create_pool, close_pool
 from app.core.auth import get_current_user
-from app.routers import stock, sales, purchases, forecast
+from app.routers import stock, sales, purchases, forecast, ledger
 
 
 @asynccontextmanager
@@ -44,6 +44,12 @@ app.include_router(
     forecast.router,
     prefix="/api/forecast",
     tags=["forecast"],
+    dependencies=_auth,
+)
+app.include_router(
+    ledger.router,
+    prefix="/api/ledger",
+    tags=["ledger"],
     dependencies=_auth,
 )
 

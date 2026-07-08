@@ -4,7 +4,11 @@ import asyncpg
 
 from app.core.database import get_conn
 from app.repositories import sales_repo
-from app.schemas.sales import MonthlySalesSchema, GroupSalesSchema, TopMoverSchema
+from app.schemas.sales import (
+    MonthlySalesSchema,
+    GroupSalesSchema,
+    TopMoverSchema,
+)
 
 router = APIRouter()
 
@@ -33,7 +37,12 @@ async def sales_by_group(
 @router.get("/top-movers", response_model=list[TopMoverSchema])
 async def top_movers(
     limit: int = Query(20, ge=1, le=100),
+    from_date: date | None = Query(None),
+    to_date: date | None = Query(None),
+    stock_group: str | None = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
 ):
     async with conn as c:
-        return await sales_repo.get_top_movers(c, limit)
+        return await sales_repo.get_top_movers(
+            c, limit, from_date, to_date, stock_group
+        )
