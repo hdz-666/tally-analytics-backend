@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import create_pool, close_pool
+from app.core.auth import get_current_user
 from app.routers import stock, sales, purchases, forecast
 
 
@@ -25,10 +26,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(stock.router, prefix="/api/stock", tags=["stock"])
-app.include_router(sales.router, prefix="/api/sales", tags=["sales"])
-app.include_router(purchases.router, prefix="/api/purchases", tags=["purchases"])
-app.include_router(forecast.router, prefix="/api/forecast", tags=["forecast"])
+_auth = [Depends(get_current_user)]
+
+app.include_router(
+    stock.router, prefix="/api/stock", tags=["stock"], dependencies=_auth
+)
+app.include_router(
+    sales.router, prefix="/api/sales", tags=["sales"], dependencies=_auth
+)
+app.include_router(
+    purchases.router,
+    prefix="/api/purchases",
+    tags=["purchases"],
+    dependencies=_auth,
+)
+app.include_router(
+    forecast.router, prefix="/api/forecast", tags=["forecast"], dependencies=_auth
+)
 
 
 @app.get("/health")
