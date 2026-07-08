@@ -6,7 +6,7 @@ from dateutil.relativedelta import relativedelta
 from app.core.config import settings
 from app.repositories import forecast_repo
 
-MIN_MONTHS_REQUIRED = 3
+MIN_MONTHS_REQUIRED = settings.forecast_min_months
 
 
 async def run_forecast(

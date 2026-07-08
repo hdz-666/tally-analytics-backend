@@ -41,7 +41,10 @@ app.include_router(
     dependencies=_auth,
 )
 app.include_router(
-    forecast.router, prefix="/api/forecast", tags=["forecast"], dependencies=_auth
+    forecast.router,
+    prefix="/api/forecast",
+    tags=["forecast"],
+    dependencies=_auth,
 )
 
 

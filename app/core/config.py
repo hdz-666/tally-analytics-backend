@@ -5,10 +5,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str
-    supabase_jwt_secret: str
+    supabase_url: str
+    supabase_secret_key: str
     allowed_origins: str = "http://localhost:5173"
 
     forecast_horizon_months: int = 6
+    forecast_min_months: int = 3
     lead_time_months: float = 1.0
     safety_stock_z: float = 1.65
 
