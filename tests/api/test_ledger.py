@@ -14,13 +14,33 @@ HEALTH_ROW = {
     "total_receipts": 8,
     "total_invoiced": 50000.0,
     "total_received": 40000.0,
+    "overdue_days": 0,
+    "aging_bucket": "current",
     "score_dso": 25.0,
-    "score_overdue": 25.0,
+    "score_aging": 25.0,
     "score_recency": 20.0,
     "score_engagement": 15.0,
     "score_balance_ratio": 10.0,
     "health_score": 95.0,
     "health_rag": "Green",
+}
+
+AGING_SUMMARY_ROW = {
+    "total_receivable": 250000.0,
+    "current_ar": 150000.0,
+    "overdue_1_30": 60000.0,
+    "overdue_31_60": 30000.0,
+    "overdue_60plus": 10000.0,
+    "credit_balance": 5000.0,
+    "current_count": 8,
+    "overdue_1_30_count": 3,
+    "overdue_31_60_count": 2,
+    "overdue_60plus_count": 1,
+    "credit_count": 1,
+    "total_revenue_12m": 1200000.0,
+    "portfolio_dso": 76.0,
+    "best_possible_dso": 45.6,
+    "add_days": 30.4,
 }
 
 PNL_ROW = {
@@ -47,6 +67,8 @@ async def test_ledger_health_returns_data(client, mock_conn):
     assert data[0]["health_score"] == 95.0
     assert data[0]["health_rag"] == "Green"
     assert data[0]["has_overdue"] is False
+    assert data[0]["aging_bucket"] == "current"
+    assert data[0]["overdue_days"] == 0
 
 
 async def test_ledger_health_empty(client, mock_conn):
@@ -63,7 +85,8 @@ async def test_ledger_health_optional_dates_null(client, mock_conn):
 
 
 async def test_ledger_health_overdue_customer(client, mock_conn):
-    row = {**HEALTH_ROW, "has_overdue": True, "health_rag": "Red", "health_score": 30.0}
+    row = {**HEALTH_ROW, "has_overdue": True, "health_rag": "Red",
+           "health_score": 30.0}
     mock_conn.fetch.return_value = [row]
     data = (await client.get("/api/ledger/health")).json()
     assert data[0]["has_overdue"] is True
@@ -88,10 +111,50 @@ async def test_pnl_monthly_empty(client, mock_conn):
 
 async def test_pnl_null_margins(client, mock_conn):
     """Zero-revenue month may have None margins."""
-    row = {**PNL_ROW, "gross_margin_pct": None, "net_margin_pct": None, "revenue": 0.0}
+    row = {**PNL_ROW, "gross_margin_pct": None, "net_margin_pct": None,
+           "revenue": 0.0}
     mock_conn.fetch.return_value = [row]
     data = (await client.get("/api/ledger/pnl")).json()
     assert data[0]["gross_margin_pct"] is None
+
+
+# ── GET /api/ledger/aging-summary ───────────────────────────────────────────
+
+async def test_aging_summary_returns_data(client, mock_conn):
+    mock_conn.fetchrow.return_value = AGING_SUMMARY_ROW
+    data = (await client.get("/api/ledger/aging-summary")).json()
+    assert data["total_receivable"] == 250000.0
+    assert data["current_ar"] == 150000.0
+    assert data["overdue_60plus"] == 10000.0
+    assert data["portfolio_dso"] == 76.0
+    assert data["best_possible_dso"] == 45.6
+    assert data["add_days"] == 30.4
+    assert data["credit_balance"] == 5000.0
+
+
+async def test_aging_summary_null_dso_when_no_revenue(client, mock_conn):
+    row = {
+        **AGING_SUMMARY_ROW,
+        "total_revenue_12m": 0.0,
+        "portfolio_dso": None,
+        "best_possible_dso": None,
+        "add_days": None,
+    }
+    mock_conn.fetchrow.return_value = row
+    data = (await client.get("/api/ledger/aging-summary")).json()
+    assert data["portfolio_dso"] is None
+    assert data["best_possible_dso"] is None
+    assert data["add_days"] is None
+
+
+async def test_aging_summary_counts(client, mock_conn):
+    mock_conn.fetchrow.return_value = AGING_SUMMARY_ROW
+    data = (await client.get("/api/ledger/aging-summary")).json()
+    assert data["current_count"] == 8
+    assert data["overdue_1_30_count"] == 3
+    assert data["overdue_31_60_count"] == 2
+    assert data["overdue_60plus_count"] == 1
+    assert data["credit_count"] == 1
 
 
 # ── POST /api/ledger/refresh ─────────────────────────────────────────────────

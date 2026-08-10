@@ -1,5 +1,5 @@
 import asyncpg
-from app.schemas.ledger import LedgerHealthSchema, PnlMonthlySchema
+from app.schemas.ledger import AgingSummarySchema, LedgerHealthSchema, PnlMonthlySchema
 
 
 async def get_ledger_health(conn: asyncpg.Connection) -> list[LedgerHealthSchema]:
@@ -14,6 +14,11 @@ async def get_pnl_monthly(conn: asyncpg.Connection) -> list[PnlMonthlySchema]:
         "SELECT * FROM tallypnl.v_pnl_monthly ORDER BY month"
     )
     return [PnlMonthlySchema(**dict(r)) for r in rows]
+
+
+async def get_aging_summary(conn: asyncpg.Connection) -> AgingSummarySchema:
+    row = await conn.fetchrow("SELECT * FROM tallypnl.v_b_aging_summary")
+    return AgingSummarySchema(**dict(row))
 
 
 async def refresh_views(conn: asyncpg.Connection) -> None:
