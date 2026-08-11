@@ -14,6 +14,7 @@
 -- =============================================================================
 
 -- Drop existing views in dependency order before recreating
+DROP VIEW          IF EXISTS tallypnl.v_b_aging_summary          CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS tallypnl.v_b_ledger_health      CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS tallypnl.v_b_ledger_summary     CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS tallypnl.v_b_invoice_activity   CASCADE;
@@ -95,7 +96,7 @@ SELECT
 FROM tallypnl.mst_ledger ml
 JOIN tallypnl.mst_group mg ON mg.name = ml.parent
 WHERE mg.primary_group = 'Sundry Debtors'
-  AND ml.closing_balance < 0    -- NEGATIVE = Debit balance = they owe us (receivable)
+  AND ml.closing_balance != 0   -- include both Dr (they owe us) and Cr (we owe them) balances
 WITH NO DATA;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_v_b_customer_outstanding_uk
@@ -187,8 +188,8 @@ SELECT
     COALESCE(ia.total_received, 0)                                      AS total_received,
     COALESCE(rv.revenue_12m, 0)                                         AS revenue_12m,
 
-    -- DSO estimate via ratio method
-    CASE WHEN COALESCE(rv.revenue_12m, 0) > 0
+    -- DSO estimate via ratio method (only meaningful when customer owes us money)
+    CASE WHEN ob.outstanding_amount > 0 AND COALESCE(rv.revenue_12m, 0) > 0
          THEN ROUND(ob.outstanding_amount / rv.revenue_12m * 365, 1)
          ELSE NULL END                                                  AS dso_estimate,
 
@@ -240,6 +241,17 @@ SELECT
     ls.total_invoiced,
     ls.total_received,
 
+    -- ── Aging metrics ─────────────────────────────────────────────────────────
+    GREATEST(0, ls.days_since_last_receipt - ls.credit_days)                        AS overdue_days,
+
+    CASE
+        WHEN ls.outstanding_amount <= 0                                              THEN 'credit'
+        WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) = 0          THEN 'current'
+        WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 30        THEN '1_30'
+        WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 60        THEN '31_60'
+        ELSE                                                                              '60plus'
+    END                                                                             AS aging_bucket,
+
     -- ── Component scores ─────────────────────────────────────────────────────
 
     -- DSO score (30 pts): ≤60d=30pts, 135d=15pts (4.5mo avg), ≥210d=0pts — linear scale 60→210
@@ -249,12 +261,19 @@ SELECT
              ELSE 15 END
     )), 1)                                                      AS score_dso,
 
-    -- Overdue score (25 pts): binary — 25 if not overdue, 0 if overdue
-    CASE WHEN ls.has_overdue THEN 0.0 ELSE 25.0 END            AS score_overdue,
+    -- Aging score (25 pts): graduated by bucket — replaces binary overdue flag
+    --   credit / current → 25 (full score) | 1-30d → 15 | 31-60d → 6 | 60d+ → 0
+    CASE
+        WHEN ls.outstanding_amount <= 0                                               THEN 25.0
+        WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) = 0           THEN 25.0
+        WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 30         THEN 15.0
+        WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 60         THEN 6.0
+        ELSE                                                                               0.0
+    END                                                                              AS score_aging,
 
-    -- Recency score (20 pts): full if last receipt within 30 days, zero at 90+ days
+    -- Recency score (20 pts): calibrated to credit terms — full if within terms, zero at 60d overdue
     ROUND(GREATEST(0, LEAST(20,
-        20.0 * GREATEST(0, 90 - ls.days_since_last_receipt) / 90.0
+        20.0 * GREATEST(0, 60.0 - GREATEST(0, ls.days_since_last_receipt - ls.credit_days)) / 60.0
     )), 1)                                                      AS score_recency,
 
     -- Engagement score (15 pts): 1.5 pts per receipt, capped at 15
@@ -271,10 +290,17 @@ SELECT
     ROUND(
         GREATEST(0, LEAST(30,
             CASE WHEN ls.dso_estimate IS NOT NULL AND ls.dso_estimate > 0
-                 THEN 30.0 * ls.credit_days / ls.dso_estimate ELSE 15 END))
-        + CASE WHEN ls.has_overdue THEN 0.0 ELSE 25.0 END
+                 THEN 30.0 * GREATEST(0, 210 - ls.dso_estimate) / 150.0
+                 ELSE 15 END))
+        + CASE
+            WHEN ls.outstanding_amount <= 0                                               THEN 25.0
+            WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) = 0           THEN 25.0
+            WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 30         THEN 15.0
+            WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 60         THEN 6.0
+            ELSE                                                                               0.0
+          END
         + GREATEST(0, LEAST(20,
-            20.0 * GREATEST(0, 90 - ls.days_since_last_receipt) / 90.0))
+            20.0 * GREATEST(0, 60.0 - GREATEST(0, ls.days_since_last_receipt - ls.credit_days)) / 60.0))
         + LEAST(15.0, ls.total_receipts * 1.5)
         + GREATEST(0, LEAST(10,
             CASE WHEN COALESCE(ls.total_invoiced, 0) > 0
@@ -286,10 +312,17 @@ SELECT
         WHEN ROUND(
             GREATEST(0, LEAST(30,
                 CASE WHEN ls.dso_estimate IS NOT NULL AND ls.dso_estimate > 0
-                     THEN 30.0 * ls.credit_days / ls.dso_estimate ELSE 15 END))
-            + CASE WHEN ls.has_overdue THEN 0.0 ELSE 25.0 END
+                     THEN 30.0 * GREATEST(0, 210 - ls.dso_estimate) / 150.0
+                     ELSE 15 END))
+            + CASE
+                WHEN ls.outstanding_amount <= 0                                               THEN 25.0
+                WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) = 0           THEN 25.0
+                WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 30         THEN 15.0
+                WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 60         THEN 6.0
+                ELSE                                                                               0.0
+              END
             + GREATEST(0, LEAST(20,
-                20.0 * GREATEST(0, 90 - ls.days_since_last_receipt) / 90.0))
+                20.0 * GREATEST(0, 60.0 - GREATEST(0, ls.days_since_last_receipt - ls.credit_days)) / 60.0))
             + LEAST(15.0, ls.total_receipts * 1.5)
             + GREATEST(0, LEAST(10,
                 CASE WHEN COALESCE(ls.total_invoiced, 0) > 0
@@ -299,10 +332,17 @@ SELECT
         WHEN ROUND(
             GREATEST(0, LEAST(30,
                 CASE WHEN ls.dso_estimate IS NOT NULL AND ls.dso_estimate > 0
-                     THEN 30.0 * ls.credit_days / ls.dso_estimate ELSE 15 END))
-            + CASE WHEN ls.has_overdue THEN 0.0 ELSE 25.0 END
+                     THEN 30.0 * GREATEST(0, 210 - ls.dso_estimate) / 150.0
+                     ELSE 15 END))
+            + CASE
+                WHEN ls.outstanding_amount <= 0                                               THEN 25.0
+                WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) = 0           THEN 25.0
+                WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 30         THEN 15.0
+                WHEN GREATEST(0, ls.days_since_last_receipt - ls.credit_days) <= 60         THEN 6.0
+                ELSE                                                                               0.0
+              END
             + GREATEST(0, LEAST(20,
-                20.0 * GREATEST(0, 90 - ls.days_since_last_receipt) / 90.0))
+                20.0 * GREATEST(0, 60.0 - GREATEST(0, ls.days_since_last_receipt - ls.credit_days)) / 60.0))
             + LEAST(15.0, ls.total_receipts * 1.5)
             + GREATEST(0, LEAST(10,
                 CASE WHEN COALESCE(ls.total_invoiced, 0) > 0
@@ -320,7 +360,68 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_v_b_ledger_health_uk
 
 
 -- =============================================================================
--- SECTION 7 — P&L monthly (regular view — always current)
+-- SECTION 7 — Aging summary (regular view — always current from latest MV)
+-- Aggregates outstanding AR by aging bucket and computes ADD / Best Possible DSO
+--
+-- Buckets (based on overdue_days = days_since_last_receipt - credit_days):
+--   credit   — customer has credit balance (we owe them)
+--   current  — outstanding but not yet overdue
+--   1_30     — 1-30 days past due
+--   31_60    — 31-60 days past due
+--   60plus   — more than 60 days past due
+-- =============================================================================
+
+CREATE OR REPLACE VIEW tallypnl.v_b_aging_summary AS
+WITH buckets AS (
+    SELECT
+        SUM(GREATEST(outstanding_amount, 0))                                            AS total_receivable,
+        SUM(CASE WHEN aging_bucket = 'current' THEN outstanding_amount  ELSE 0 END)    AS current_ar,
+        SUM(CASE WHEN aging_bucket = '1_30'    THEN outstanding_amount  ELSE 0 END)    AS overdue_1_30,
+        SUM(CASE WHEN aging_bucket = '31_60'   THEN outstanding_amount  ELSE 0 END)    AS overdue_31_60,
+        SUM(CASE WHEN aging_bucket = '60plus'  THEN outstanding_amount  ELSE 0 END)    AS overdue_60plus,
+        SUM(CASE WHEN outstanding_amount < 0   THEN -outstanding_amount ELSE 0 END)    AS credit_balance,
+        COUNT(CASE WHEN aging_bucket = 'current' THEN 1 END)                           AS current_count,
+        COUNT(CASE WHEN aging_bucket = '1_30'    THEN 1 END)                           AS overdue_1_30_count,
+        COUNT(CASE WHEN aging_bucket = '31_60'   THEN 1 END)                           AS overdue_31_60_count,
+        COUNT(CASE WHEN aging_bucket = '60plus'  THEN 1 END)                           AS overdue_60plus_count,
+        COUNT(CASE WHEN outstanding_amount < 0   THEN 1 END)                           AS credit_count,
+        SUM(COALESCE(revenue_12m, 0))                                                  AS total_revenue_12m
+    FROM tallypnl.v_b_ledger_health
+)
+SELECT
+    total_receivable,
+    current_ar,
+    overdue_1_30,
+    overdue_31_60,
+    overdue_60plus,
+    credit_balance,
+    current_count,
+    overdue_1_30_count,
+    overdue_31_60_count,
+    overdue_60plus_count,
+    credit_count,
+    total_revenue_12m,
+
+    -- Portfolio DSO: total receivable vs 12-month revenue (annualised)
+    CASE WHEN total_revenue_12m > 0
+         THEN ROUND(total_receivable / total_revenue_12m * 365, 1)
+         ELSE NULL END                                                                  AS portfolio_dso,
+
+    -- Best Possible DSO: only the not-yet-overdue portion of AR
+    CASE WHEN total_revenue_12m > 0
+         THEN ROUND(current_ar / total_revenue_12m * 365, 1)
+         ELSE NULL END                                                                  AS best_possible_dso,
+
+    -- ADD = Portfolio DSO − Best Possible DSO (days lost to late payment)
+    CASE WHEN total_revenue_12m > 0
+         THEN ROUND((total_receivable - current_ar) / total_revenue_12m * 365, 1)
+         ELSE NULL END                                                                  AS add_days
+
+FROM buckets;
+
+
+-- =============================================================================
+-- SECTION 8 — P&L monthly (regular view — always current)
 -- Revenue  : tallypnl trn_accounting (Sales Accounts on INVOICE vouchers)
 -- COGS     : tallydb trn_inventory (Company A purchases)
 -- Fixed    : tallypnl.manual_costs

@@ -16,13 +16,33 @@ class LedgerHealthSchema(BaseModel):
     total_receipts: int
     total_invoiced: float
     total_received: float
+    overdue_days: int
+    aging_bucket: str
     score_dso: float
-    score_overdue: float
+    score_aging: float
     score_recency: float
     score_engagement: float
     score_balance_ratio: float
     health_score: float
     health_rag: str
+
+
+class AgingSummarySchema(BaseModel):
+    total_receivable: float
+    current_ar: float
+    overdue_1_30: float
+    overdue_31_60: float
+    overdue_60plus: float
+    credit_balance: float
+    current_count: int
+    overdue_1_30_count: int
+    overdue_31_60_count: int
+    overdue_60plus_count: int
+    credit_count: int
+    total_revenue_12m: float
+    portfolio_dso: float | None = None
+    best_possible_dso: float | None = None
+    add_days: float | None = None
 
 
 class PnlMonthlySchema(BaseModel):

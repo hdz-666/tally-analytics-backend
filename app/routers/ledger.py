@@ -3,7 +3,7 @@ import asyncpg
 
 from app.core.database import get_conn
 from app.repositories import ledger_repo
-from app.schemas.ledger import LedgerHealthSchema, PnlMonthlySchema
+from app.schemas.ledger import AgingSummarySchema, LedgerHealthSchema, PnlMonthlySchema
 
 router = APIRouter()
 
@@ -18,6 +18,12 @@ async def ledger_health(conn: asyncpg.Connection = Depends(get_conn)):
 async def pnl_monthly(conn: asyncpg.Connection = Depends(get_conn)):
     async with conn as c:
         return await ledger_repo.get_pnl_monthly(c)
+
+
+@router.get("/aging-summary", response_model=AgingSummarySchema)
+async def aging_summary(conn: asyncpg.Connection = Depends(get_conn)):
+    async with conn as c:
+        return await ledger_repo.get_aging_summary(c)
 
 
 @router.post("/refresh")
