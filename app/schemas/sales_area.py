@@ -30,6 +30,8 @@ class PincodeSalesSchema(BaseModel):
     pincode: str
     area: str
     state: str | None = None
+    lat: float
+    lon: float
     sold_qty: float
     sold_amount: float
     client_count: int

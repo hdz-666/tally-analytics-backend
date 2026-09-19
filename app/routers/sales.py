@@ -85,6 +85,21 @@ async def area_clients(
         )
 
 
+@router.get("/by-area/{area}/pincodes", response_model=list[PincodeSalesSchema])
+async def area_pincodes(
+    area: str,
+    from_date: date | None = Query(None),
+    to_date: date | None = Query(None),
+    item: str | None = Query(None),
+    stock_group: list[str] | None = Query(None),
+    conn: asyncpg.Connection = Depends(get_conn),
+):
+    async with conn as c:
+        return await sales_area_repo.get_pincodes_in_area(
+            c, area, from_date, to_date, item, stock_group
+        )
+
+
 @router.get("/clients/{party_name}/items", response_model=list[ClientItemSchema])
 async def client_items(
     party_name: str,
