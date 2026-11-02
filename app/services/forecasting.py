@@ -31,23 +31,48 @@ async def run_forecast(
         r["name"]: float(r["closing_balance"]) for r in stock_rows
     }
 
+    # Every item is forecast from the same point: the latest month with sales
+    data_end = df["month"].max()
+
     records = []
     for item, grp in df.groupby("item"):
         grp = grp.sort_values("month")
-        series = grp.set_index("month")["sold_qty"]
         stock_group = grp.iloc[0]["stock_group"] or ""
 
-        if len(series) < MIN_MONTHS_REQUIRED:
-            continue
-
-        forecast_points = _forecast_series(
-            series,
-            horizon_months,
-            settings.safety_stock_z,
+        # Months without sales count as 0 (from the item's first sale up to the
+        # latest month), so irregular sellers don't get an inflated average.
+        series = (
+            grp.groupby("month")["sold_qty"].sum()
+            .reindex(
+                pd.date_range(grp["month"].iloc[0], data_end, freq="MS"),
+                fill_value=0.0,
+            )
         )
 
+        # New items with too little history get a flat forecast at their
+        # average so far instead of being skipped.
+        if len(series) >= MIN_MONTHS_REQUIRED:
+            forecast_points = _forecast_series(
+                series,
+                horizon_months,
+                settings.safety_stock_z,
+            )
+            model_used = "trend+ema"
+        else:
+            forecast_points = _naive_forecast(
+                series,
+                horizon_months,
+                settings.safety_stock_z,
+            )
+            model_used = "naive"
+
         avg_demand = float(series.tail(6).mean())
-        std_demand = float(series.tail(6).std() or avg_demand * 0.2)
+        recent_std = series.tail(6).std()
+        std_demand = (
+            float(recent_std)
+            if pd.notna(recent_std) and recent_std > 0
+            else avg_demand * 0.2
+        )
 
         # Reorder point: historical avg × lead time + safety stock (backward-looking)
         reorder_point = (
@@ -61,7 +86,7 @@ async def run_forecast(
         reorder_qty = max(round(forecast_avg * settings.lead_time_months, 4), 1.0)
         cur_stock = current_stock.get(str(item), 0.0)
 
-        last_month = series.index[-1].to_pydatetime().date()
+        last_month = data_end.to_pydatetime().date()
         for h, pt in enumerate(forecast_points, start=1):
             fm = (last_month.replace(day=1) + relativedelta(months=h))
             records.append({
@@ -75,7 +100,7 @@ async def run_forecast(
                 "reorder_point": round(reorder_point, 4),
                 "reorder_qty": round(reorder_qty, 4),
                 "needs_reorder": cur_stock < reorder_point,
-                "model_used": "trend+ema",
+                "model_used": model_used,
             })
 
     if records:
@@ -114,3 +139,20 @@ def _forecast_series(
             "upper_bound": forecast + z * std,
         })
     return points
+
+
+def _naive_forecast(
+    series: pd.Series,
+    horizon: int,
+    z: float,
+) -> list[dict]:
+    """Flat forecast at the average monthly demand — for items with too little
+    history to fit a trend."""
+    level = float(series.mean())
+    std = float(np.std(series.values, ddof=1)) if len(series) > 1 else level * 0.2
+    point = {
+        "forecast_qty": level,
+        "lower_bound": max(level - z * std, 0.0),
+        "upper_bound": level + z * std,
+    }
+    return [dict(point) for _ in range(horizon)]

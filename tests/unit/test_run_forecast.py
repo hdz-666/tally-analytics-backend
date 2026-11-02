@@ -37,11 +37,58 @@ async def test_no_sales_returns_zero(replace_batch):
     assert conn.fetch.call_count == 1  # stock query skipped
 
 
-async def test_items_below_min_months_are_skipped(replace_batch):
-    short = sales_rows("Short", [5.0] * (settings.forecast_min_months - 1))
+async def test_items_below_min_months_get_naive_forecast(replace_batch):
+    short = sales_rows("Short", [4.0, 6.0][: settings.forecast_min_months - 1])
     conn = make_conn(short)
-    assert await run_forecast(conn) == 0
-    replace_batch.assert_not_called()
+    assert await run_forecast(conn, horizon_months=2) == 1
+
+    records = replace_batch.call_args.args[1]
+    assert all(r["model_used"] == "naive" for r in records)
+    assert all(r["forecast_qty"] == 5.0 for r in records)  # flat at the average
+
+
+async def test_single_month_item_is_forecast():
+    conn = make_conn(sales_rows("Brand New", [8.0]))
+    with patch(
+        "app.services.forecasting.forecast_repo.replace_forecast_batch",
+        new_callable=AsyncMock,
+    ) as replace_batch:
+        assert await run_forecast(conn, horizon_months=1) == 1
+    rec = replace_batch.call_args.args[1][0]
+    assert rec["model_used"] == "naive"
+    assert rec["forecast_qty"] == 8.0
+    # std is undefined for one month, so the 20%-of-average fallback applies
+    expected = 8.0 * settings.lead_time_months + settings.safety_stock_z * 8.0 * 0.2
+    assert rec["reorder_point"] == pytest.approx(expected, abs=1e-3)
+
+
+async def test_months_without_sales_count_as_zero(replace_batch):
+    """Sold in Jan and Mar only: Feb counts as 0, so this is 3 months of history."""
+    rows = [
+        {"item": "Gappy", "stock_group": "G", "month": date(2024, 1, 1), "sold_qty": 9.0},
+        {"item": "Gappy", "stock_group": "G", "month": date(2024, 3, 1), "sold_qty": 9.0},
+    ]
+    conn = make_conn(rows)
+    await run_forecast(conn, horizon_months=1)
+    rec = replace_batch.call_args.args[1][0]
+    assert rec["model_used"] == "trend+ema"
+    # avg demand over Jan..Mar is (9 + 0 + 9) / 3 = 6, not 9; sample std of [9, 0, 9] ≈ 5.196
+    assert rec["reorder_point"] == pytest.approx(
+        6.0 * settings.lead_time_months + settings.safety_stock_z * 5.196, abs=1e-2
+    )
+
+
+async def test_items_that_stopped_selling_are_padded_to_latest_month(replace_batch):
+    """An item last sold in Jan is forecast from the data's latest month, with
+    the months since counted as 0."""
+    rows = sales_rows("Old", [10.0]) + sales_rows("Active", [1.0, 1.0, 1.0, 1.0])
+    conn = make_conn(rows)
+    await run_forecast(conn, horizon_months=1)
+    by_item = {r["item"]: r for r in replace_batch.call_args.args[1]}
+
+    assert by_item["Old"]["forecast_month"] == date(2024, 5, 1)
+    assert by_item["Old"]["model_used"] == "trend+ema"  # Jan..Apr = 4 months
+    assert by_item["Old"]["forecast_qty"] < 10.0
 
 
 async def test_one_record_per_horizon_month(replace_batch):
@@ -73,12 +120,12 @@ async def test_counts_distinct_items(replace_batch):
     rows = (
         sales_rows("A", [1.0, 2.0, 3.0])
         + sales_rows("B", [4.0, 5.0, 6.0])
-        + sales_rows("C", [1.0])  # too short
+        + [{"item": "C", "stock_group": "G", "month": date(2024, 3, 1), "sold_qty": 1.0}]
     )
     conn = make_conn(rows)
-    assert await run_forecast(conn, horizon_months=2) == 2
-    items = {r["item"] for r in replace_batch.call_args.args[1]}
-    assert items == {"A", "B"}
+    assert await run_forecast(conn, horizon_months=2) == 3
+    by_model = {r["item"]: r["model_used"] for r in replace_batch.call_args.args[1]}
+    assert by_model == {"A": "trend+ema", "B": "trend+ema", "C": "naive"}
 
 
 async def test_needs_reorder_when_stock_below_reorder_point(replace_batch):

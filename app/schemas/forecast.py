@@ -9,6 +9,7 @@ class ForecastPointSchema(BaseModel):
     forecast_qty: float
     lower_bound: float
     upper_bound: float
+    model_used: str | None = None
 
 
 class ReorderAlertSchema(BaseModel):
