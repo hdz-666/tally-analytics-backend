@@ -30,6 +30,12 @@ async def test_get_forecast_all_items(client, mock_conn):
     assert data[0]["lower_bound"] == 8.0
 
 
+async def test_get_forecast_includes_model_used(client, mock_conn):
+    mock_conn.fetch.return_value = [{**FORECAST_ROW, "model_used": "naive"}]
+    data = (await client.get("/api/forecast/items?item=Widget+A")).json()
+    assert data[0]["model_used"] == "naive"
+
+
 async def test_get_forecast_empty(client, mock_conn):
     mock_conn.fetch.return_value = []
     assert (await client.get("/api/forecast/items")).json() == []

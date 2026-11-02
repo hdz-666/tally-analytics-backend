@@ -18,7 +18,7 @@ app/
   services/      forecasting logic
   scripts/       one-off jobs (geocode_parties.py)
   main.py        app entrypoint
-sql/             schema + materialized view definitions (run in Supabase SQL editor)
+sql/             setup.sql — all tables and views (run in Supabase SQL editor)
 tests/           api/ and unit/ pytest suites
 ```
 
@@ -59,7 +59,7 @@ cp .env.example .env
 | `SUPABASE_SECRET_KEY` | yes | — | Supabase secret (service) key, sent as `apikey` when verifying tokens |
 | `ALLOWED_ORIGINS` | no | `http://localhost:5173` | Comma-separated CORS origins (add your Vercel URL in prod) |
 | `FORECAST_HORIZON_MONTHS` | no | `6` | Months ahead to forecast |
-| `FORECAST_MIN_MONTHS` | no | `3` | Minimum months of history needed to forecast an item |
+| `FORECAST_MIN_MONTHS` | no | `3` | Months of history needed for the trend model; items with less get a flat forecast at their average so far |
 | `LEAD_TIME_MONTHS` | no | `1.0` | Supplier lead time used for reorder points |
 | `SAFETY_STOCK_Z` | no | `1.65` | Z-score for safety stock (1.65 ≈ 95% service level) |
 
@@ -67,13 +67,14 @@ cp .env.example .env
 
 ### 4. Database setup (first time only)
 
-Run the files in `sql/` in the Supabase SQL editor, in this order:
+Run [`sql/setup.sql`](sql/setup.sql) in the Supabase SQL editor. It creates everything in dependency order and is safe to re-run:
 
-1. `views_phase1.sql` — Company A views and the `stock_forecast` table
-2. `company_b_schema.sql` — Company B schema (then sync Company B with `tally-database-loader`)
-3. `views.sql` — switches stock views to Company B data
-4. `ledger_pnl.sql` — ledger analytics and P&L views
-5. `geo_sales.sql` — area-wise sales tables/view
+1. Company B raw tables in `tallypnl` (then sync Company B with `tally-database-loader`)
+2. Stock, sales and purchase views and the `stock_forecast` table (Company A, `tallydb`)
+3. Area-wise sales tables and view (Company A, `tallydb`)
+4. Ledger analytics and P&L views (Company B, `tallypnl`; COGS from `tallydb`)
+
+Part 5 at the end of the file lists the `REFRESH` statements to run after every data sync.
 
 Then populate party locations for the area-wise sales map (safe to re-run after each data sync; it caches lookups):
 
@@ -81,7 +82,7 @@ Then populate party locations for the area-wise sales map (safe to re-run after 
 python -m app.scripts.geocode_parties
 ```
 
-> Company A has complete purchases but unsplit items; Company B has all billing with split items. Company B is the source of truth for sales and items.
+> Company A (`tallydb`) has complete sales, purchases and inventory, and is the source for every stock, sales and forecast view. Company B (`tallypnl`) is accounting-only — it has no inventory items — and feeds the ledger and P&L views.
 
 ### 5. Run the server
 
