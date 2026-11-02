@@ -11,10 +11,13 @@ from unittest.mock import AsyncMock, MagicMock
 from httpx import AsyncClient, ASGITransport
 
 from app.main import app
-from app.core.auth import get_current_user
+from app.core.auth import ADMIN, Principal, get_current_user, get_principal
 from app.core.database import get_conn
 
 MOCK_USER = {"id": "test-user-id", "email": "test@example.com"}
+ADMIN_PRINCIPAL = Principal(
+    id="test-user-id", email="test@example.com", role=ADMIN
+)
 
 
 class MockTransaction:
@@ -31,6 +34,7 @@ class MockConnection:
     def __init__(self):
         self.fetch = AsyncMock(return_value=[])
         self.fetchrow = AsyncMock(return_value=None)
+        self.fetchval = AsyncMock(return_value=None)
         self.execute = AsyncMock(return_value=None)
         self.copy_records_to_table = AsyncMock(return_value=None)
 
@@ -50,9 +54,24 @@ def mock_conn():
 
 
 @pytest.fixture
-def override_app(mock_conn):
+def principal():
+    """The signed-in user's role; tests swap it via `as_principal`."""
+    return {"value": ADMIN_PRINCIPAL}
+
+
+@pytest.fixture
+def as_principal(principal):
+    def set_principal(p: Principal) -> None:
+        principal["value"] = p
+
+    return set_principal
+
+
+@pytest.fixture
+def override_app(mock_conn, principal):
     """FastAPI app with auth and DB dependencies replaced by test doubles."""
     app.dependency_overrides[get_current_user] = lambda: MOCK_USER
+    app.dependency_overrides[get_principal] = lambda: principal["value"]
     app.dependency_overrides[get_conn] = lambda: mock_conn
     yield app
     app.dependency_overrides.clear()

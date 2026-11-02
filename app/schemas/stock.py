@@ -5,8 +5,9 @@ class StockItemSchema(BaseModel):
     name: str
     stock_group: str | None = None
     closing_balance: float
-    closing_value: float
-    closing_rate: float
+    # None when withheld from a company exec.
+    closing_value: float | None = None
+    closing_rate: float | None = None
 
 
 class StockGroupSchema(BaseModel):

@@ -16,13 +16,15 @@
 --   2. public stock / sales views     (tallydb)
 --   3. public area-wise sales         (tallydb + party_area)
 --   4. tallypnl ledger & P&L          (tallypnl; COGS from tallydb)
---   5. Refresh — run after every data sync
+--   5. Access control                 (app roles; lock down the Data API)
+--   6. Refresh — run after every data sync
 --
 -- Re-run behaviour
 --   Parts 1–2 use IF NOT EXISTS: re-running never drops data, but it also won't
 --   change an existing view — DROP it first if its definition changes.
 --   Part 3 recreates v_sales_by_area. Part 4 recreates its views WITH NO DATA,
---   so run Part 5 afterwards.
+--   so run Part 6 afterwards. Part 5 re-applies its REVOKEs, so keep it
+--   after everything that (re)creates a table or view.
 -- =============================================================================
 
 
@@ -1204,7 +1206,65 @@ ORDER BY m.month;
 
 
 -- ###############################################################################
--- PART 5 — Refresh (run after every data sync, in this order)
+-- PART 5 — Access control
+-- ###############################################################################
+-- Roles: admin (everything), executive (dashboard, inventory, sales, area
+-- sales), company_exec (sales and area sales for their assigned stock groups
+-- only — no rates or stock value). The FastAPI backend enforces these on
+-- every request; it connects as postgres, which bypasses RLS.
+--
+-- A user with no row in user_roles gets no access. Manage roles from the
+-- app's Users page; bootstrap the first admin by hand (see the bottom of
+-- this part).
+
+CREATE TABLE IF NOT EXISTS public.user_roles (
+    user_id    uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    role       text NOT NULL
+               CHECK (role IN ('admin', 'executive', 'company_exec')),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Top-level stock groups (brands such as Gloirio, Trend) a company exec may
+-- see. Every group nested under them is included automatically.
+CREATE TABLE IF NOT EXISTS public.user_categories (
+    user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    stock_group varchar(1024) NOT NULL,
+    PRIMARY KEY (user_id, stock_group)
+);
+
+ALTER TABLE public.user_roles      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_categories ENABLE ROW LEVEL SECURITY;
+
+-- The browser key may only read the signed-in user's own rows, never write.
+DROP POLICY IF EXISTS "read own role" ON public.user_roles;
+CREATE POLICY "read own role" ON public.user_roles
+    FOR SELECT TO authenticated USING (user_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "read own categories" ON public.user_categories;
+CREATE POLICY "read own categories" ON public.user_categories
+    FOR SELECT TO authenticated USING (user_id = (SELECT auth.uid()));
+
+-- Close the Data API. Supabase grants anon/authenticated access to every new
+-- object in public by default, and materialized views can't carry RLS — so
+-- without this anyone holding the publishable key (it ships in the frontend
+-- bundle) could read every sales view directly, bypassing the backend.
+-- The app never reads data through the Data API, so nothing depends on it.
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL TABLES IN SCHEMA tallydb FROM anon, authenticated;
+REVOKE ALL ON ALL TABLES IN SCHEMA tallypnl FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    REVOKE ALL ON TABLES FROM anon, authenticated;
+
+GRANT SELECT ON public.user_roles, public.user_categories TO authenticated;
+
+-- Bootstrap the first admin (run once, with your own login email):
+-- INSERT INTO public.user_roles (user_id, role)
+-- SELECT id, 'admin' FROM auth.users WHERE email = 'you@example.com'
+-- ON CONFLICT (user_id) DO UPDATE SET role = 'admin';
+
+
+-- ###############################################################################
+-- PART 6 — Refresh (run after every data sync, in this order)
 -- ###############################################################################
 -- Run these on their own — not as part of the setup above.
 --

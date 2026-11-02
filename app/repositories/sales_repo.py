@@ -7,11 +7,21 @@ from app.schemas.sales import (
 )
 
 
+def _scope(
+    conditions: list[str], args: list, allowed_groups: list[str] | None
+) -> None:
+    """Restrict to a company exec's stock groups; None means unrestricted."""
+    if allowed_groups is not None:
+        args.append(allowed_groups)
+        conditions.append(f"stock_group = ANY(${len(args)})")
+
+
 async def get_monthly_sales(
     conn: asyncpg.Connection,
     item: str | None = None,
     from_date: date | None = None,
     to_date: date | None = None,
+    allowed_groups: list[str] | None = None,
 ) -> list[MonthlySalesSchema]:
     conditions = []
     args: list = []
@@ -25,6 +35,7 @@ async def get_monthly_sales(
     if to_date:
         args.append(to_date)
         conditions.append(f"month <= ${len(args)}")
+    _scope(conditions, args, allowed_groups)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     rows = await conn.fetch(
@@ -37,6 +48,7 @@ async def get_sales_by_group(
     conn: asyncpg.Connection,
     from_date: date | None = None,
     to_date: date | None = None,
+    allowed_groups: list[str] | None = None,
 ) -> list[GroupSalesSchema]:
     conditions = []
     args: list = []
@@ -47,6 +59,7 @@ async def get_sales_by_group(
     if to_date:
         args.append(to_date)
         conditions.append(f"month <= ${len(args)}")
+    _scope(conditions, args, allowed_groups)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     rows = await conn.fetch(
@@ -63,8 +76,10 @@ async def get_top_movers(
     from_date: date | None = None,
     to_date: date | None = None,
     stock_group: str | None = None,
+    allowed_groups: list[str] | None = None,
 ) -> list[TopMoverSchema]:
-    if from_date or to_date or stock_group:
+    # v_top_moving_items is unfiltered, so any filter needs the live query.
+    if from_date or to_date or stock_group or allowed_groups is not None:
         conditions: list[str] = []
         args: list = [limit]
         if from_date:
@@ -76,6 +91,7 @@ async def get_top_movers(
         if stock_group:
             args.append(stock_group)
             conditions.append(f"stock_group = ${len(args)}")
+        _scope(conditions, args, allowed_groups)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         rows = await conn.fetch(
             f"""

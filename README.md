@@ -73,8 +73,27 @@ Run [`sql/setup.sql`](sql/setup.sql) in the Supabase SQL editor. It creates ever
 2. Stock, sales and purchase views and the `stock_forecast` table (Company A, `tallydb`)
 3. Area-wise sales tables and view (Company A, `tallydb`)
 4. Ledger analytics and P&L views (Company B, `tallypnl`; COGS from `tallydb`)
+5. Access control: `user_roles` / `user_categories` tables, and REVOKEs that close the Supabase Data API
 
-Part 5 at the end of the file lists the `REFRESH` statements to run after every data sync.
+Part 6 at the end of the file lists the `REFRESH` statements to run after every data sync.
+
+Then make yourself the first admin: with your existing login (or one added under Authentication → Users in the Supabase dashboard), run this in the SQL editor:
+
+```sql
+INSERT INTO public.user_roles (user_id, role)
+SELECT id, 'admin' FROM auth.users WHERE email = 'you@example.com'
+ON CONFLICT (user_id) DO UPDATE SET role = 'admin';
+```
+
+After that, manage everyone else from the app's **Users** page.
+
+| Role | Can see |
+|---|---|
+| `admin` | Everything, including Users, Purchases, Forecast and Ledger & P&L |
+| `executive` | Dashboard, Inventory, Sales, Area Sales |
+| `company_exec` | Sales and Area Sales for their assigned stock groups (and every group under them) only; no rates or stock value |
+
+A signed-in user with no role gets `403` from every endpoint.
 
 Then populate party locations for the area-wise sales map (safe to re-run after each data sync; it caches lookups):
 

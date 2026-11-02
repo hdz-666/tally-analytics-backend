@@ -15,6 +15,7 @@ def _filter_conditions(
     stock_groups: list[str] | None,
     pincode: str | None,
     args: list,
+    allowed_groups: list[str] | None = None,
 ) -> list[str]:
     conditions = []
     if from_date:
@@ -32,6 +33,11 @@ def _filter_conditions(
     if pincode:
         args.append(pincode)
         conditions.append(f"pincode = ${len(args)}")
+    # A company exec's scope — ANDed with any stock_groups the client picked,
+    # so the client can narrow it but never widen it. None = unrestricted.
+    if allowed_groups is not None:
+        args.append(allowed_groups)
+        conditions.append(f"stock_group = ANY(${len(args)})")
     return conditions
 
 
@@ -42,10 +48,12 @@ async def get_sales_by_area(
     item: str | None = None,
     stock_groups: list[str] | None = None,
     pincode: str | None = None,
+    allowed_groups: list[str] | None = None,
 ) -> list[AreaSalesSchema]:
     args: list = []
     conditions = _filter_conditions(
-        from_date, to_date, item, stock_groups, pincode, args
+        from_date, to_date, item, stock_groups, pincode, args,
+        allowed_groups,
     )
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     rows = await conn.fetch(
@@ -112,10 +120,12 @@ async def get_clients_in_area(
     item: str | None = None,
     stock_groups: list[str] | None = None,
     pincode: str | None = None,
+    allowed_groups: list[str] | None = None,
 ) -> list[AreaClientSchema]:
     args: list = [area]
     conditions = ["area = $1"] + _filter_conditions(
-        from_date, to_date, item, stock_groups, pincode, args
+        from_date, to_date, item, stock_groups, pincode, args,
+        allowed_groups,
     )
     where = "WHERE " + " AND ".join(conditions)
     rows = await conn.fetch(
@@ -141,12 +151,14 @@ async def get_pincodes_in_area(
     to_date: date | None = None,
     item: str | None = None,
     stock_groups: list[str] | None = None,
+    allowed_groups: list[str] | None = None,
 ) -> list[PincodeSalesSchema]:
     """Pincode-level breakdown within one city — the drill-down step between
     the city total and its clients, for locality-level targeting."""
     args: list = [area]
     conditions = ["area = $1", "pincode IS NOT NULL"] + _filter_conditions(
-        from_date, to_date, item, stock_groups, None, args
+        from_date, to_date, item, stock_groups, None, args,
+        allowed_groups,
     )
     where = "WHERE " + " AND ".join(conditions)
     rows = await conn.fetch(
@@ -174,10 +186,12 @@ async def get_items_for_client(
     party_name: str,
     from_date: date | None = None,
     to_date: date | None = None,
+    allowed_groups: list[str] | None = None,
 ) -> list[ClientItemSchema]:
     args: list = [party_name]
     conditions = ["party_name = $1"] + _filter_conditions(
-        from_date, to_date, None, None, None, args
+        from_date, to_date, None, None, None, args,
+        allowed_groups,
     )
     where = "WHERE " + " AND ".join(conditions)
     rows = await conn.fetch(
@@ -201,6 +215,7 @@ async def get_pincodes(
     to_date: date | None = None,
     item: str | None = None,
     stock_groups: list[str] | None = None,
+    allowed_groups: list[str] | None = None,
 ) -> list[PincodeSalesSchema]:
     """Distinct pincodes seen in the data — a finer-grained, searchable
     complement to the city-level `area` rollup (one city can span several
@@ -208,7 +223,8 @@ async def get_pincodes(
     """
     args: list = []
     conditions = ["pincode IS NOT NULL"] + _filter_conditions(
-        from_date, to_date, item, stock_groups, None, args
+        from_date, to_date, item, stock_groups, None, args,
+        allowed_groups,
     )
     where = "WHERE " + " AND ".join(conditions)
     rows = await conn.fetch(

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 import asyncpg
 
+from app.core.auth import ADMIN, require_roles
 from app.core.database import get_conn
 from app.repositories import forecast_repo
 from app.services import forecasting
@@ -12,8 +13,16 @@ from app.schemas.forecast import (
 
 router = APIRouter()
 
+# The router is open to executives for the dashboard's reorder alerts; the
+# Forecast page itself is admin-only.
+_admin = [Depends(require_roles(ADMIN))]
 
-@router.get("/items", response_model=list[ForecastPointSchema])
+
+@router.get(
+    "/items",
+    response_model=list[ForecastPointSchema],
+    dependencies=_admin,
+)
 async def get_forecast(
     item: str | None = None,
     conn: asyncpg.Connection = Depends(get_conn),
@@ -28,7 +37,9 @@ async def reorder_alerts(conn: asyncpg.Connection = Depends(get_conn)):
         return await forecast_repo.get_reorder_alerts(c)
 
 
-@router.post("/run", response_model=ForecastRunResponseSchema)
+@router.post(
+    "/run", response_model=ForecastRunResponseSchema, dependencies=_admin
+)
 async def run_forecast(
     horizon_months: int = Query(default=6, ge=1, le=24),
     conn: asyncpg.Connection = Depends(get_conn),

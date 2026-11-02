@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from datetime import date
 import asyncpg
 
+from app.core.auth import Principal, get_principal
 from app.core.database import get_conn
 from app.repositories import sales_repo, sales_area_repo
 from app.schemas.sales import (
@@ -25,9 +26,12 @@ async def monthly_sales(
     from_date: date | None = Query(None),
     to_date: date | None = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
+    principal: Principal = Depends(get_principal),
 ):
     async with conn as c:
-        return await sales_repo.get_monthly_sales(c, item, from_date, to_date)
+        return await sales_repo.get_monthly_sales(
+            c, item, from_date, to_date, principal.group_scope
+        )
 
 
 @router.get("/by-group", response_model=list[GroupSalesSchema])
@@ -35,9 +39,12 @@ async def sales_by_group(
     from_date: date | None = Query(None),
     to_date: date | None = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
+    principal: Principal = Depends(get_principal),
 ):
     async with conn as c:
-        return await sales_repo.get_sales_by_group(c, from_date, to_date)
+        return await sales_repo.get_sales_by_group(
+            c, from_date, to_date, principal.group_scope
+        )
 
 
 @router.get("/top-movers", response_model=list[TopMoverSchema])
@@ -47,10 +54,12 @@ async def top_movers(
     to_date: date | None = Query(None),
     stock_group: str | None = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
+    principal: Principal = Depends(get_principal),
 ):
     async with conn as c:
         return await sales_repo.get_top_movers(
-            c, limit, from_date, to_date, stock_group
+            c, limit, from_date, to_date, stock_group,
+            principal.group_scope,
         )
 
 
@@ -62,10 +71,12 @@ async def sales_by_area(
     stock_group: list[str] | None = Query(None),
     pincode: str | None = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
+    principal: Principal = Depends(get_principal),
 ):
     async with conn as c:
         return await sales_area_repo.get_sales_by_area(
-            c, from_date, to_date, item, stock_group, pincode
+            c, from_date, to_date, item, stock_group, pincode,
+            principal.group_scope,
         )
 
 
@@ -78,10 +89,12 @@ async def area_clients(
     stock_group: list[str] | None = Query(None),
     pincode: str | None = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
+    principal: Principal = Depends(get_principal),
 ):
     async with conn as c:
         return await sales_area_repo.get_clients_in_area(
-            c, area, from_date, to_date, item, stock_group, pincode
+            c, area, from_date, to_date, item, stock_group, pincode,
+            principal.group_scope,
         )
 
 
@@ -93,10 +106,12 @@ async def area_pincodes(
     item: str | None = Query(None),
     stock_group: list[str] | None = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
+    principal: Principal = Depends(get_principal),
 ):
     async with conn as c:
         return await sales_area_repo.get_pincodes_in_area(
-            c, area, from_date, to_date, item, stock_group
+            c, area, from_date, to_date, item, stock_group,
+            principal.group_scope,
         )
 
 
@@ -106,10 +121,12 @@ async def client_items(
     from_date: date | None = Query(None),
     to_date: date | None = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
+    principal: Principal = Depends(get_principal),
 ):
     async with conn as c:
         return await sales_area_repo.get_items_for_client(
-            c, party_name, from_date, to_date
+            c, party_name, from_date, to_date,
+            principal.group_scope,
         )
 
 
@@ -120,8 +137,10 @@ async def pincodes(
     item: str | None = Query(None),
     stock_group: list[str] | None = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
+    principal: Principal = Depends(get_principal),
 ):
     async with conn as c:
         return await sales_area_repo.get_pincodes(
-            c, from_date, to_date, item, stock_group
+            c, from_date, to_date, item, stock_group,
+            principal.group_scope,
         )
